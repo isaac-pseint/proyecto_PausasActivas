@@ -1,0 +1,29 @@
+## Build results
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+
+## Visual Studio & IDEs
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Local configuration files (ignore secrets, keep examples)
+appsettings.json
+appsettings.*.json
+!appsettings.example.json
+!appsettings.*.example.json
+
+## Dotnet CLI & NuGet local caches
+.dotnet/
+.nuget/
+.appdata/
+
+## Logs and temporary files
+*.log
+*.tmp
+*.bak
