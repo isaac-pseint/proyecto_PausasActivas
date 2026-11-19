@@ -49,6 +49,7 @@ public class EmpleadosView : UserControl
     private List<Usuario> _todosEmpleados = new();
     private Usuario? _empleadoSeleccionado;
     private List<ImagenMetadata> _todasImagenes = new();
+    private bool _cargando;
 
     public EmpleadosView(IAdminRepository adminRepo)
     {
@@ -141,7 +142,19 @@ public class EmpleadosView : UserControl
             BorderStyle = BorderStyle.FixedSingle,
             Dock = DockStyle.Fill
         };
-        _txtBuscar.TextChanged += (s, e) => AplicarFiltroBusqueda();
+        _txtBuscar.TextChanged += (s, e) =>
+        {
+            AplicarFiltroBusqueda();
+            if (_dgvEmpleados.Rows.Count > 0 && _dgvEmpleados.SelectedRows.Count > 0)
+            {
+                _ = CargarEmpleadoSeleccionadoAsync(forzarRecarga: true);
+            }
+            else
+            {
+                _empleadoSeleccionado = null;
+                MostrarEditor(false);
+            }
+        };
 
         _btnRefrescar = new Button
         {
@@ -171,7 +184,19 @@ public class EmpleadosView : UserControl
         _dgvEmpleados = new DataGridView { Dock = DockStyle.Fill };
         AppTheme.EstilizarDataGridView(_dgvEmpleados);
         ConfigurarColumnasEmpleados();
-        _dgvEmpleados.SelectionChanged += DgvEmpleados_SelectionChanged;
+        _dgvEmpleados.SelectionChanged += async (s, e) =>
+        {
+            if (_cargando) return;
+            await CargarEmpleadoSeleccionadoAsync();
+        };
+        _dgvEmpleados.CellClick += async (s, e) =>
+        {
+            if (e.RowIndex >= 0)
+            {
+                await CargarEmpleadoSeleccionadoAsync();
+            }
+        };
+        _dgvEmpleados.CellFormatting += DgvEmpleados_CellFormatting;
 
         pnlCard.Controls.Add(_dgvEmpleados);
         panel.Controls.Add(pnlCard);
@@ -182,17 +207,47 @@ public class EmpleadosView : UserControl
     {
         _dgvEmpleados.Columns.Clear();
         _dgvEmpleados.Columns.Add(new DataGridViewTextBoxColumn
-        { Name = "colNombreUsr", HeaderText = "Nombre / Usuario", FillWeight = 30 });
+        {
+            Name = "colNombreUsr",
+            HeaderText = "Nombre / Usuario",
+            FillWeight = 34,
+            MinimumWidth = 140
+        });
         _dgvEmpleados.Columns.Add(new DataGridViewTextBoxColumn
-        { Name = "colPc", HeaderText = "PC", FillWeight = 15 });
+        {
+            Name = "colPc",
+            HeaderText = "PC",
+            FillWeight = 16,
+            MinimumWidth = 75
+        });
         _dgvEmpleados.Columns.Add(new DataGridViewTextBoxColumn
-        { Name = "colEstado", HeaderText = "Estado", Width = 70, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
+        {
+            Name = "colEstado",
+            HeaderText = "Estado",
+            Width = 65,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+        });
         _dgvEmpleados.Columns.Add(new DataGridViewTextBoxColumn
-        { Name = "colIntervalo", HeaderText = "Int. (min)", Width = 70, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
+        {
+            Name = "colIntervalo",
+            HeaderText = "Intervalo",
+            Width = 65,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+        });
         _dgvEmpleados.Columns.Add(new DataGridViewTextBoxColumn
-        { Name = "colDuracion", HeaderText = "Dur. (seg)", Width = 70, AutoSizeMode = DataGridViewAutoSizeColumnMode.None });
+        {
+            Name = "colDuracion",
+            HeaderText = "Duración",
+            Width = 65,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None
+        });
         _dgvEmpleados.Columns.Add(new DataGridViewTextBoxColumn
-        { Name = "colConexion", HeaderText = "Última conexión", FillWeight = 20 });
+        {
+            Name = "colConexion",
+            HeaderText = "Última conexión",
+            FillWeight = 26,
+            MinimumWidth = 135
+        });
     }
 
     // ==================== PANEL DERECHO: EDITOR ====================
@@ -463,6 +518,7 @@ public class EmpleadosView : UserControl
     // ==================== CARGA DE DATOS ====================
     private async Task CargarDatosAsync()
     {
+        _cargando = true;
         _btnRefrescar.Enabled = false;
         try
         {
@@ -473,6 +529,7 @@ public class EmpleadosView : UserControl
             AplicarFiltroBusqueda();
 
             // Reseleccionar el empleado que estaba seleccionado
+            bool restaurado = false;
             if (idSeleccionPrev.HasValue)
             {
                 for (int i = 0; i < _dgvEmpleados.Rows.Count; i++)
@@ -481,9 +538,15 @@ public class EmpleadosView : UserControl
                     {
                         _dgvEmpleados.Rows[i].Selected = true;
                         _dgvEmpleados.FirstDisplayedScrollingRowIndex = i;
+                        restaurado = true;
                         break;
                     }
                 }
+            }
+
+            if (!restaurado && _dgvEmpleados.Rows.Count > 0)
+            {
+                _dgvEmpleados.Rows[0].Selected = true;
             }
         }
         catch (Exception ex)
@@ -493,7 +556,19 @@ public class EmpleadosView : UserControl
         }
         finally
         {
+            _cargando = false;
             _btnRefrescar.Enabled = true;
+        }
+
+        // Si hay filas y una está seleccionada, disparar explícitamente la carga del editor
+        if (_dgvEmpleados.Rows.Count > 0 && _dgvEmpleados.SelectedRows.Count > 0)
+        {
+            await CargarEmpleadoSeleccionadoAsync(forzarRecarga: true);
+        }
+        else
+        {
+            _empleadoSeleccionado = null;
+            MostrarEditor(false);
         }
     }
 
@@ -512,36 +587,77 @@ public class EmpleadosView : UserControl
         {
             string display = !string.IsNullOrWhiteSpace(emp.Nombre) ? $"{emp.Nombre} ({emp.UsuarioWindows})" : emp.UsuarioWindows;
             string estado = emp.Activo ? "Activo" : "Inactivo";
+            string intervalo = $"{emp.IntervaloMin} min";
+            string duracion = $"{emp.DuracionSeg} s";
 
             string conexion;
             if (emp.UltimaConexion.HasValue)
             {
                 var local = emp.UltimaConexion.Value.ToLocalTime();
-                bool reciente = (DateTime.Now - local).TotalMinutes <= 10;
-                conexion = reciente ? $"🟢 {local:dd/MM HH:mm}" : $"{local:dd/MM/yyyy HH:mm}";
+                var dif = DateTime.Now - local;
+                if (dif.TotalMinutes <= 10)
+                {
+                    int mins = Math.Max(0, (int)dif.TotalMinutes);
+                    conexion = mins == 0 ? "En línea (ahora)" : $"En línea (hace {mins} min)";
+                }
+                else
+                {
+                    conexion = local.ToString("dd/MM/yyyy HH:mm");
+                }
             }
             else
             {
                 conexion = "Sin registro";
             }
 
-            int idx = _dgvEmpleados.Rows.Add(display, emp.Pc ?? "—", estado, emp.IntervaloMin, emp.DuracionSeg, conexion);
+            int idx = _dgvEmpleados.Rows.Add(display, emp.Pc ?? "—", estado, intervalo, duracion, conexion);
             _dgvEmpleados.Rows[idx].Tag = emp;
+        }
+    }
 
-            // Resaltar visualmente estados
-            if (!emp.Activo)
+    private void DgvEmpleados_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= _dgvEmpleados.Rows.Count || e.CellStyle == null) return;
+
+        string colName = _dgvEmpleados.Columns[e.ColumnIndex].Name;
+        if (colName == "colEstado")
+        {
+            string val = e.Value?.ToString() ?? "";
+            if (val == "Activo")
             {
-                _dgvEmpleados.Rows[idx].Cells["colEstado"].Style.ForeColor = AppTheme.Danger;
+                e.CellStyle.ForeColor = AppTheme.Success;
+                e.CellStyle.SelectionForeColor = AppTheme.Success;
+            }
+            else if (val == "Inactivo")
+            {
+                e.CellStyle.ForeColor = AppTheme.Danger;
+                e.CellStyle.SelectionForeColor = AppTheme.Danger;
+            }
+        }
+        else if (colName == "colConexion")
+        {
+            string val = e.Value?.ToString() ?? "";
+            if (val.StartsWith("En línea", StringComparison.OrdinalIgnoreCase))
+            {
+                e.CellStyle.ForeColor = AppTheme.Success;
+                e.CellStyle.SelectionForeColor = AppTheme.Success;
+                e.CellStyle.Font = AppTheme.SmallBoldFont;
+            }
+            else if (val == "Sin registro")
+            {
+                e.CellStyle.ForeColor = AppTheme.TextMuted;
+                e.CellStyle.SelectionForeColor = AppTheme.TextMuted;
             }
             else
             {
-                _dgvEmpleados.Rows[idx].Cells["colEstado"].Style.ForeColor = AppTheme.Success;
+                e.CellStyle.ForeColor = AppTheme.TextSecondary;
+                e.CellStyle.SelectionForeColor = AppTheme.TextSecondary;
             }
         }
     }
 
     // ==================== SELECCIÓN DE EMPLEADO ====================
-    private async void DgvEmpleados_SelectionChanged(object? sender, EventArgs e)
+    private async Task CargarEmpleadoSeleccionadoAsync(bool forzarRecarga = false)
     {
         if (_dgvEmpleados.SelectedRows.Count == 0)
         {
@@ -550,12 +666,29 @@ public class EmpleadosView : UserControl
             return;
         }
 
-        _empleadoSeleccionado = _dgvEmpleados.SelectedRows[0].Tag as Usuario;
-        if (_empleadoSeleccionado == null) return;
+        var usuario = _dgvEmpleados.SelectedRows[0].Tag as Usuario;
+        if (usuario == null)
+        {
+            _empleadoSeleccionado = null;
+            MostrarEditor(false);
+            return;
+        }
 
+        // Evitar recargas duplicadas solo si ya está cargado ese mismo usuario.Id y el panel de edición ya está visible
+        if (!forzarRecarga && _empleadoSeleccionado?.Id == usuario.Id && EsEditorVisible())
+        {
+            return;
+        }
+
+        _empleadoSeleccionado = usuario;
         MostrarEditor(true);
         CargarDatosEnEditor(_empleadoSeleccionado);
         await CargarAsignacionesAsync(_empleadoSeleccionado.Id);
+    }
+
+    private bool EsEditorVisible()
+    {
+        return _txtNombre != null && _txtNombre.Visible;
     }
 
     private void MostrarEditor(bool visible)
@@ -765,9 +898,9 @@ public class EmpleadosView : UserControl
             return;
 
         int totalAncho = _split.Width;
-        const int min1 = 280;
-        const int min2 = 360;
-        const int distanciaDeseada = 440;
+        const int min1 = 340;
+        const int min2 = 380;
+        int distanciaDeseada = Math.Max(min1, (int)(totalAncho * 0.42));
 
         // Si el control aún no se ha medido o es menor a la suma requerida, evitar asignar mínimos que causen excepción
         if (totalAncho <= (min1 + min2))

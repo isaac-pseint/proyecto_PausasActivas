@@ -1,12 +1,8 @@
-﻿<#
-.SYNOPSIS
-    Script de empaquetado y publicación para PausasActivas (SENA).
-.DESCRIPTION
-    Compila y empaqueta PausasEmpleado y PausasAdmin como ejecutables únicos (.exe)
-    autocontenidos para Windows x64 (.NET 8).
-    Garantiza que appsettings.json y appsettings.example.json queden fuera del bundle
-    y PRESERVA las contraseñas ya configuradas por el usuario.
-#>
+# =================================================================
+# Script de publicacion y empaquetado para PausasActivas (SENA)
+# Genera ejecutables unicos (.exe) autocontenidos para Windows x64.
+# Preserva appsettings.json si ya tiene credenciales configuradas.
+# =================================================================
 
 [CmdletBinding()]
 param(
@@ -16,7 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host " PAUSAS ACTIVAS CORPORATIVAS - PUBLICACIÓN DE EJECUTABLES (.EXE) " -ForegroundColor Cyan
+Write-Host " PAUSAS ACTIVAS CORPORATIVAS - PUBLICACION DE EJECUTABLES (.EXE) " -ForegroundColor Cyan
 Write-Host " Plataforma: Windows x64 | Framework: .NET 8 (Self-Contained)    " -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""
@@ -30,7 +26,7 @@ $publishRoot = Join-Path $baseDir "publish"
 $outEmpleado = Join-Path $publishRoot "PausasEmpleado"
 $outAdmin = Join-Path $publishRoot "PausasAdmin"
 
-# 1. Respaldar contraseñas/configuraciones existentes para no sobrescribirlas
+# 1. Respaldar configuraciones existentes para no sobrescribirlas
 Write-Host "[1/4] Comprobando configuraciones existentes en .\publish\..." -ForegroundColor Yellow
 
 $backupEmpleadoJson = $null
@@ -41,12 +37,12 @@ $cfgAdmPath = Join-Path $outAdmin "appsettings.json"
 
 if (Test-Path $cfgEmpPath) {
     $backupEmpleadoJson = Get-Content -Raw -Path $cfgEmpPath
-    Write-Host "   -> Configuración existente de PausasEmpleado respaldada en memoria." -ForegroundColor DarkGray
+    Write-Host "   -> Configuracion existente de PausasEmpleado respaldada en memoria." -ForegroundColor DarkGray
 }
 
 if (Test-Path $cfgAdmPath) {
     $backupAdminJson = Get-Content -Raw -Path $cfgAdmPath
-    Write-Host "   -> Configuración existente de PausasAdmin respaldada en memoria." -ForegroundColor DarkGray
+    Write-Host "   -> Configuracion existente de PausasAdmin respaldada en memoria." -ForegroundColor DarkGray
 }
 
 # Preparar carpetas de salida
@@ -68,7 +64,7 @@ if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasAdmin") 
     Get-ChildItem -Path $outAdmin -Filter "*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
 }
 
-# 2. Publicación de PausasEmpleado
+# 2. Publicacion de PausasEmpleado
 if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasEmpleado") {
     Write-Host "[2/4] Publicando PausasEmpleado (win-x64, SingleFile)..." -ForegroundColor Yellow
     $argsEmpleado = @(
@@ -86,14 +82,14 @@ if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasEmpleado
     )
     & dotnet @argsEmpleado
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: Falló la publicación de PausasEmpleado." -ForegroundColor Red
+        Write-Host "ERROR: Fallo la publicacion de PausasEmpleado." -ForegroundColor Red
         exit 1
     }
 } else {
-    Write-Host "[2/4] Omitiendo PausasEmpleado (publicación selectiva: $Proyecto)." -ForegroundColor DarkGray
+    Write-Host "[2/4] Omitiendo PausasEmpleado (publicacion selectiva: $Proyecto)." -ForegroundColor DarkGray
 }
 
-# 3. Publicación de PausasAdmin
+# 3. Publicacion de PausasAdmin
 if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasAdmin") {
     Write-Host "[3/4] Publicando PausasAdmin (win-x64, SingleFile)..." -ForegroundColor Yellow
     $argsAdmin = @(
@@ -111,24 +107,24 @@ if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasAdmin") 
     )
     & dotnet @argsAdmin
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: Falló la publicación de PausasAdmin." -ForegroundColor Red
+        Write-Host "ERROR: Fallo la publicacion de PausasAdmin." -ForegroundColor Red
         exit 1
     }
 } else {
-    Write-Host "[3/4] Omitiendo PausasAdmin (publicación selectiva: $Proyecto)." -ForegroundColor DarkGray
+    Write-Host "[3/4] Omitiendo PausasAdmin (publicacion selectiva: $Proyecto)." -ForegroundColor DarkGray
 }
 
-# 4. Restauración de credenciales previas y verificación
-Write-Host "[4/4] Restaurando y verificando archivos de configuración..." -ForegroundColor Yellow
+# 4. Restauracion de credenciales previas y verificacion
+Write-Host "[4/4] Restaurando y verificando archivos de configuracion..." -ForegroundColor Yellow
 
 if ($backupEmpleadoJson) {
     Set-Content -Path $cfgEmpPath -Value $backupEmpleadoJson -Encoding utf8
-    Write-Host "   [PRESERVADO] appsettings.json de PausasEmpleado restaurado con su contraseña previa." -ForegroundColor Green
+    Write-Host "   [PRESERVADO] appsettings.json de PausasEmpleado restaurado con su contrasena previa." -ForegroundColor Green
 }
 
 if ($backupAdminJson) {
     Set-Content -Path $cfgAdmPath -Value $backupAdminJson -Encoding utf8
-    Write-Host "   [PRESERVADO] appsettings.json de PausasAdmin restaurado con su contraseña previa." -ForegroundColor Green
+    Write-Host "   [PRESERVADO] appsettings.json de PausasAdmin restaurado con su contrasena previa." -ForegroundColor Green
 }
 
 function Validar-Salida($carpeta, $exeName, $appTitle) {
@@ -140,13 +136,13 @@ function Validar-Salida($carpeta, $exeName, $appTitle) {
     Write-Host ">> $appTitle" -ForegroundColor Green
     if (Test-Path $exePath) {
         $sizeMb = [Math]::Round(((Get-Item $exePath).Length / 1MB), 2)
-        Write-Host "   [OK] Ejecutable: $exeName ($sizeMb MB)" -ForegroundColor Gray
+        Write-Host ("   [OK] Ejecutable: {0} ({1} MB)" -f $exeName, $sizeMb) -ForegroundColor Gray
     } else {
-        Write-Host "   [ERROR] No se encontró $exeName" -ForegroundColor Red
+        Write-Host ("   [ERROR] No se encontro {0}" -f $exeName) -ForegroundColor Red
     }
 
     if (Test-Path $configPath) {
-        Write-Host "   [OK] Configuración externa: appsettings.json (editable sin recompilar)" -ForegroundColor Gray
+        Write-Host "   [OK] Configuracion externa: appsettings.json (editable sin recompilar)" -ForegroundColor Gray
     } else {
         Write-Host "   [AVISO] appsettings.json no encontrado (generando desde example...)" -ForegroundColor Yellow
         if (Test-Path $examplePath) {
@@ -160,15 +156,15 @@ function Validar-Salida($carpeta, $exeName, $appTitle) {
 }
 
 if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasEmpleado") {
-    Validar-Salida $outEmpleado "PausasEmpleado.exe" "MÓDULO EMPLEADO (Segundo plano)"
+    Validar-Salida $outEmpleado "PausasEmpleado.exe" "MODULO EMPLEADO (Segundo plano)"
 }
 if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasAdmin") {
-    Validar-Salida $outAdmin "PausasAdmin.exe" "MÓDULO ADMINISTRADOR (Panel de control)"
+    Validar-Salida $outAdmin "PausasAdmin.exe" "MODULO ADMINISTRADOR (Panel de control)"
 }
 
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Cyan
-Write-Host " ¡PUBLICACIÓN COMPLETADA EXITOSAMENTE!                           " -ForegroundColor Cyan
+Write-Host " PUBLICACION COMPLETADA EXITOSAMENTE!                            " -ForegroundColor Cyan
 Write-Host " Directorio de entrega: .\publish\                               " -ForegroundColor Cyan
 Write-Host "=================================================================" -ForegroundColor Cyan
 Write-Host ""

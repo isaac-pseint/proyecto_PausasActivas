@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using PausasCore.Configuration;
@@ -13,10 +15,20 @@ namespace PausasEmpleado;
 
 /// <summary>
 /// Contexto de ejecución principal de la aplicación en segundo plano.
-/// Administra el ciclo de vida del NotifyIcon, el menú contextual, la sincronización y la programación.
+/// Administra el ciclo de vida del NotifyIcon, el menú contextual, la sincronización y la programación de pausas.
 /// </summary>
 public class TrayApplicationContext : ApplicationContext
 {
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    private const uint WM_NULL = 0x0000;
+
     private readonly SynchronizationContext? _syncContext;
     private readonly Control _syncControl;
 
@@ -37,32 +49,26 @@ public class TrayApplicationContext : ApplicationContext
     private readonly Icon _appIcon;
     private bool _disposed;
 
+    // Estado atómico para evitar tocar ToolStripMenuItems desde hilos secundarios
+    private volatile string _estadoTexto = "Iniciando servicio...";
+    private volatile bool _sincronizando;
+
     public TrayApplicationContext(DbConfig? config = null)
     {
         Logger.Info("Iniciando contexto de aplicación en segundo plano...");
 
-        // Capturar el SynchronizationContext del hilo principal de UI y forzar creación de handle auxiliar
+        // 1. Capturar SynchronizationContext del hilo principal de UI y control auxiliar
         _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _syncControl = new Control();
-        _ = _syncControl.Handle; // Garantiza que existe un HWND en el hilo principal antes de iniciar servicios
+        _ = _syncControl.Handle;
 
-        // 1. Cargar configuración de base de datos
-        _dbConfig = config ?? DbConfig.CargarDesdeArchivo();
-
-        // 2. Inicializar servicios de datos y lógica
-        var repository = new EmpleadoRepository(_dbConfig);
-        _cacheService = new CacheService();
-        _syncService = new SyncService(repository, _cacheService);
-        _pauseManager = new PauseManager(_dbConfig.PinEmergencia);
-        _scheduler = new PausaScheduler(_syncService, _cacheService, _pauseManager);
-
-        // 3. Crear ícono en memoria con GDI+
+        // 2. Crear ícono de bandeja en memoria con GDI+
         _appIcon = TrayIconHelper.CrearIconoBandeja();
 
-        // 4. Configurar menú contextual del NotifyIcon
+        // 3. Crear ContextMenuStrip e ítems primero en el hilo principal de UI
         _contextMenu = new ContextMenuStrip();
 
-        _itemEstado = new ToolStripMenuItem("Iniciando servicio...")
+        _itemEstado = new ToolStripMenuItem(_estadoTexto)
         {
             Enabled = false,
             Font = new Font("Segoe UI", 9f, FontStyle.Bold)
@@ -87,7 +93,12 @@ public class TrayApplicationContext : ApplicationContext
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(_itemSalir);
 
-        // 5. Configurar el NotifyIcon
+        // Actualizar el estado de los ítems al abrir el menú (siempre corre en el hilo de UI)
+        _contextMenu.Opening += ContextMenu_Opening;
+        _contextMenu.Opened += ContextMenu_Opened;
+        _contextMenu.Closed += ContextMenu_Closed;
+
+        // 4. Crear y configurar NotifyIcon en el hilo de UI
         _notifyIcon = new NotifyIcon
         {
             Icon = _appIcon,
@@ -96,72 +107,199 @@ public class TrayApplicationContext : ApplicationContext
             Visible = true
         };
 
-        // 6. Suscribir eventos de ciclo de vida
+        // Manejar MouseUp para desplegar el menú de forma confiable en Windows 11 (incluso en overflow ^)
+        _notifyIcon.MouseUp += NotifyIcon_MouseUp;
+
+        // 5. Cargar configuración de base de datos
+        _dbConfig = config ?? DbConfig.CargarDesdeArchivo();
+
+        // 6. Inicializar servicios de datos y lógica
+        var repository = new EmpleadoRepository(_dbConfig);
+        _cacheService = new CacheService();
+        _syncService = new SyncService(repository, _cacheService);
+        _pauseManager = new PauseManager(_dbConfig.PinEmergencia);
+        _scheduler = new PausaScheduler(_syncService, _cacheService, _pauseManager);
+
+        // 7. Suscribir eventos de ciclo de vida
         _pauseManager.PausaIniciada += OnPausaIniciada;
         _pauseManager.PausaFinalizada += OnPausaFinalizada;
         _syncService.SincronizacionTerminada += OnSincronizacionTerminada;
-        _scheduler.EstadoCambiado += ActualizarMenuEstado;
+        _scheduler.EstadoCambiado += ActualizarEstado;
 
-        // 7. Iniciar servicios en segundo plano
-        _syncService.Iniciar();
+        // 8. Iniciar scheduler y sincronización inicial de forma puramente asíncrona sin bloquear el message loop
         _scheduler.Iniciar();
+        _ = IniciarSincronizacionInicialAsync();
 
-        ActualizarMenuEstado();
+        ActualizarEstado();
         Logger.Info("PausasEmpleado iniciado exitosamente en la bandeja del sistema.");
     }
 
-    private void ActualizarMenuEstado()
+    /// <summary>
+    /// Maneja el despliegue manual del menú contextual ante clics sobre el ícono de bandeja.
+    /// Resuelve la falta de respuesta en Windows 11 dentro del panel de desbordamiento (^).
+    /// </summary>
+    private void NotifyIcon_MouseUp(object? sender, MouseEventArgs e)
     {
-        if (_disposed) return;
-
-        // Si se llama desde un hilo secundario (ej. temporizador de sincronización),
-        // despachar al hilo principal de WinForms usando SynchronizationContext sin depender de handles no creados
-        if (_syncContext != null && SynchronizationContext.Current != _syncContext)
+        if (e.Button == MouseButtons.Right || e.Button == MouseButtons.Left)
         {
-            _syncContext.Post(_ => ActualizarMenuEstado(), null);
+            MostrarMenuContextual();
+        }
+    }
+
+    private void MostrarMenuContextual()
+    {
+        if (_disposed || _contextMenu == null) return;
+
+        if (_contextMenu.Visible)
+        {
+            _contextMenu.Close();
             return;
         }
 
         try
         {
-            string texto = _scheduler.ObtenerTextoEstado();
-            _itemEstado.Text = texto;
+            if (!_contextMenu.IsHandleCreated)
+            {
+                _ = _contextMenu.Handle;
+            }
 
-            // Limitar texto para evitar desborde del tooltip de Windows (máximo 63 caracteres)
-            string textoTooltip = texto.Length > 63 ? texto[..60] + "..." : texto;
-            _notifyIcon.Text = $"Pausas Activas\n{textoTooltip}";
+            // Windows requiere que la ventana sea de primer plano antes de mostrar el menú contextual
+            SetForegroundWindow(_contextMenu.Handle);
+            _contextMenu.Show(Cursor.Position);
+            SetForegroundWindow(_contextMenu.Handle);
         }
         catch (Exception ex)
         {
-            Logger.Error("Error al actualizar estado del menú contextual", ex);
+            Logger.Error("Error al mostrar menú contextual desde NotifyIcon", ex);
+        }
+    }
+
+    private void ContextMenu_Opening(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        try
+        {
+            _estadoTexto = _scheduler.ObtenerTextoEstado();
+            _itemEstado.Text = _estadoTexto;
+            _itemSalir.Enabled = !_pauseManager.HayPausaActiva;
+            _itemAutoStart.Checked = AutoStartHelper.EstaHabilitado();
+            _itemSincronizar.Enabled = !_sincronizando;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("Error en ContextMenu_Opening", ex);
+        }
+    }
+
+    private void ContextMenu_Opened(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_contextMenu.IsHandleCreated)
+            {
+                SetForegroundWindow(_contextMenu.Handle);
+            }
+        }
+        catch { }
+    }
+
+    private void ContextMenu_Closed(object? sender, ToolStripDropDownClosedEventArgs e)
+    {
+        try
+        {
+            if (_syncControl.IsHandleCreated && !_syncControl.IsDisposed)
+            {
+                PostMessage(_syncControl.Handle, WM_NULL, IntPtr.Zero, IntPtr.Zero);
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Sincronización inicial no bloqueante que permite al message loop de WinForms comenzar de inmediato.
+    /// </summary>
+    private async Task IniciarSincronizacionInicialAsync()
+    {
+        try
+        {
+            await Task.Yield();
+            _syncService.Iniciar();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("Error en inicio asíncrono de sincronización", ex);
+        }
+    }
+
+    /// <summary>
+    /// Actualiza el estado en memoria y despacha de forma segura al hilo principal de UI.
+    /// </summary>
+    private void ActualizarEstado()
+    {
+        if (_disposed) return;
+
+        try
+        {
+            _estadoTexto = _scheduler.ObtenerTextoEstado();
+        }
+        catch
+        {
+            _estadoTexto = "En espera";
+        }
+
+        void AplicarUI()
+        {
+            if (_disposed) return;
+            try
+            {
+                string texto = _estadoTexto;
+                string textoTooltip = texto.Length > 63 ? texto[..60] + "..." : texto;
+                _notifyIcon.Text = $"Pausas Activas\n{textoTooltip}";
+
+                _itemEstado.Text = texto;
+                _itemSalir.Enabled = !_pauseManager.HayPausaActiva;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Error al refrescar estado de UI", ex);
+            }
+        }
+
+        if (_syncContext != null && SynchronizationContext.Current != _syncContext)
+        {
+            _syncContext.Post(_ => AplicarUI(), null);
+        }
+        else
+        {
+            AplicarUI();
         }
     }
 
     private void OnSincronizacionTerminada(bool exito, string estado)
     {
-        ActualizarMenuEstado();
+        ActualizarEstado();
     }
 
     private void OnPausaIniciada()
     {
-        // Deshabilitar opción de salir mientras la pausa esté en pantalla
-        _itemSalir.Enabled = false;
-        ActualizarMenuEstado();
+        ActualizarEstado();
     }
 
     private void OnPausaFinalizada(bool completadaNormal)
     {
-        // Re-habilitar opción de salir al terminar la pausa
-        _itemSalir.Enabled = true;
-        ActualizarMenuEstado();
+        ActualizarEstado();
     }
 
     private async void OnSincronizarClick(object? sender, EventArgs e)
     {
+        if (_sincronizando) return;
+        _sincronizando = true;
+
         try
         {
             _itemSincronizar.Enabled = false;
-            _itemEstado.Text = "Sincronizando con el servidor...";
+            _estadoTexto = "Sincronizando con el servidor...";
+            _itemEstado.Text = _estadoTexto;
+
             await _syncService.SincronizarAhoraAsync();
         }
         catch (Exception ex)
@@ -170,8 +308,9 @@ public class TrayApplicationContext : ApplicationContext
         }
         finally
         {
+            _sincronizando = false;
             _itemSincronizar.Enabled = true;
-            ActualizarMenuEstado();
+            ActualizarEstado();
         }
     }
 
@@ -214,8 +353,14 @@ public class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             _notifyIcon.Visible = false;
+            _notifyIcon.MouseUp -= NotifyIcon_MouseUp;
             _notifyIcon.Dispose();
+
+            _contextMenu.Opening -= ContextMenu_Opening;
+            _contextMenu.Opened -= ContextMenu_Opened;
+            _contextMenu.Closed -= ContextMenu_Closed;
             _contextMenu.Dispose();
+
             _appIcon.Dispose();
             _syncControl.Dispose();
             _scheduler.Dispose();
