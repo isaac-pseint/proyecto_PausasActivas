@@ -36,6 +36,7 @@ public class EmpleadosView : UserControl
     private DateTimePicker _dtpHoraInicio = null!;
     private DateTimePicker _dtpHoraFin = null!;
     private Button _btnGuardar = null!;
+    private Button _btnAplicarATodos = null!;
 
     // Asignador de imágenes
     private ListBox _lstDisponibles = null!;
@@ -436,10 +437,15 @@ public class EmpleadosView : UserControl
         };
         y += 130;
 
-        // ---- Botón Guardar ----
-        _btnGuardar = new Button { Text = "Guardar cambios", Size = new Size(180, 40), Location = new Point(20, y) };
+        // ---- Botones Guardar y Aplicar a Todos ----
+        _btnGuardar = new Button { Text = "Guardar cambios", Size = new Size(170, 40), Location = new Point(20, y) };
         AppTheme.EstilizarBotonPrimario(_btnGuardar);
         _btnGuardar.Click += async (s, e) => await GuardarCambiosAsync();
+
+        _btnAplicarATodos = new Button { Text = "Aplicar a todos", Size = new Size(160, 40), Location = new Point(200, y) };
+        AppTheme.EstilizarBotonSecundario(_btnAplicarATodos);
+        _btnAplicarATodos.Click += async (s, e) => await AplicarConfiguracionATodosAsync();
+
         y += 50;
 
         // Ensamblar todos los controles en el panel editor
@@ -458,7 +464,8 @@ public class EmpleadosView : UserControl
             _lstDisponibles, _btnAgregar, _btnQuitar, _lstAsignadas,
             _btnSubir, _btnBajar,
             _picPreview,
-            _btnGuardar
+            _btnGuardar,
+            _btnAplicarATodos
         });
 
         // Ocultar todo el editor hasta seleccionar un empleado
@@ -844,6 +851,7 @@ public class EmpleadosView : UserControl
         }
 
         _btnGuardar.Enabled = false;
+        _btnAplicarATodos.Enabled = false;
         _btnGuardar.Text = "Guardando...";
 
         try
@@ -883,7 +891,104 @@ public class EmpleadosView : UserControl
         finally
         {
             _btnGuardar.Enabled = true;
+            _btnAplicarATodos.Enabled = true;
             _btnGuardar.Text = "Guardar cambios";
+        }
+    }
+
+    // ==================== APLICAR CONFIGURACIÓN A TODOS ====================
+    private async Task AplicarConfiguracionATodosAsync()
+    {
+        // 1. Validar hora_inicio < hora_fin
+        TimeSpan horaInicio = _dtpHoraInicio.Value.TimeOfDay;
+        TimeSpan horaFin = _dtpHoraFin.Value.TimeOfDay;
+
+        if (horaInicio >= horaFin)
+        {
+            MessageBox.Show("La hora de inicio debe ser anterior a la hora de fin.\n" +
+                "Esta restricción es validada tanto por la aplicación como por SQL Server (CHECK constraint).",
+                "Validación de horario",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            _dtpHoraInicio.Focus();
+            return;
+        }
+
+        int totalEmpleados = _todosEmpleados.Count;
+        if (totalEmpleados == 0)
+        {
+            MessageBox.Show("No hay empleados registrados en el sistema.", "Información",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        bool activo = _chkActivo.Checked;
+        int intervaloMin = (int)_nudIntervalo.Value;
+        int duracionSeg = (int)_nudDuracion.Value;
+        string orden = _cmbOrden.SelectedItem?.ToString() ?? "secuencial";
+
+        var idsAsignados = new List<int>();
+        foreach (var item in _lstAsignadas.Items)
+        {
+            if (item is ImagenListItem ili)
+                idsAsignados.Add(ili.Meta.Id);
+        }
+
+        string resumenImagenes = idsAsignados.Count > 0
+            ? $"{idsAsignados.Count} imagen(es) asignada(s)"
+            : "Catálogo completo (sin restricción)";
+
+        // 2. Diálogo de confirmación con detalle de parámetros
+        string mensaje = $"¿Está seguro de aplicar la configuración actual a TODOS los empleados registrados ({totalEmpleados} usuario{(totalEmpleados == 1 ? "" : "s")})?\n\n" +
+                         $"• Pausas habilitadas: {(activo ? "Sí" : "No")}\n" +
+                         $"• Intervalo: {intervaloMin} minutos\n" +
+                         $"• Duración: {duracionSeg} segundos\n" +
+                         $"• Horario laboral: {horaInicio:hh\\:mm} - {horaFin:hh\\:mm}\n" +
+                         $"• Orden: {orden}\n" +
+                         $"• Imágenes: {resumenImagenes}\n\n" +
+                         "Nota: Los nombres visibles individuales, nombres de usuario Windows y nombres de PC no serán modificados.";
+
+        var respuesta = MessageBox.Show(mensaje,
+            "Confirmar aplicación masiva a todos los empleados",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (respuesta != DialogResult.Yes)
+            return;
+
+        // 3. Ejecución atómica en segundo plano
+        _btnGuardar.Enabled = false;
+        _btnAplicarATodos.Enabled = false;
+        _btnAplicarATodos.Text = "Aplicando...";
+
+        try
+        {
+            await _adminRepo.AplicarConfiguracionATodosAsync(
+                activo,
+                intervaloMin,
+                duracionSeg,
+                orden,
+                horaInicio,
+                horaFin,
+                idsAsignados);
+
+            MessageBox.Show($"La configuración se aplicó exitosamente a todos los empleados ({totalEmpleados} usuario{(totalEmpleados == 1 ? "" : "s")}).",
+                "Éxito",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+
+            // Refrescar tabla manteniendo selección
+            await CargarDatosAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Error al aplicar la configuración masiva:\n{ex.Message}", "Error",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _btnGuardar.Enabled = true;
+            _btnAplicarATodos.Enabled = true;
+            _btnAplicarATodos.Text = "Aplicar a todos";
         }
     }
 

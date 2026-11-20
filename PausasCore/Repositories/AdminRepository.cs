@@ -423,6 +423,77 @@ public class AdminRepository : IAdminRepository
         }
     }
 
+    public async Task AplicarConfiguracionATodosAsync(
+        bool activo,
+        int intervaloMin,
+        int duracionSeg,
+        string orden,
+        TimeSpan horaInicio,
+        TimeSpan horaFin,
+        IReadOnlyList<int> imagenIdsOrdenadas)
+    {
+        await using var conn = new SqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        await using var trans = (SqlTransaction)await conn.BeginTransactionAsync();
+        try
+        {
+            // 1. Actualizar configuración en todos los usuarios existentes (sin alterar nombre, usuario_windows ni pc)
+            const string sqlUpdate = @"
+                UPDATE usuarios
+                SET activo = @activo,
+                    intervalo_min = @intervaloMin,
+                    duracion_seg = @duracionSeg,
+                    orden = @orden,
+                    hora_inicio = @horaInicio,
+                    hora_fin = @horaFin,
+                    actualizado = SYSUTCDATETIME();";
+
+            await using (var cmdUpdate = new SqlCommand(sqlUpdate, conn, trans))
+            {
+                cmdUpdate.Parameters.Add(new SqlParameter("@activo", SqlDbType.Bit) { Value = activo });
+                cmdUpdate.Parameters.Add(new SqlParameter("@intervaloMin", SqlDbType.Int) { Value = intervaloMin });
+                cmdUpdate.Parameters.Add(new SqlParameter("@duracionSeg", SqlDbType.Int) { Value = duracionSeg });
+                cmdUpdate.Parameters.Add(new SqlParameter("@orden", SqlDbType.NVarChar, 20) { Value = orden });
+                cmdUpdate.Parameters.Add(new SqlParameter("@horaInicio", SqlDbType.Time) { Value = horaInicio });
+                cmdUpdate.Parameters.Add(new SqlParameter("@horaFin", SqlDbType.Time) { Value = horaFin });
+                await cmdUpdate.ExecuteNonQueryAsync();
+            }
+
+            // 2. Limpiar asignaciones previas en usuario_imagenes para todos los usuarios
+            const string sqlDeleteAll = "DELETE FROM usuario_imagenes;";
+            await using (var cmdDelete = new SqlCommand(sqlDeleteAll, conn, trans))
+            {
+                await cmdDelete.ExecuteNonQueryAsync();
+            }
+
+            // 3. Reasignar imágenes con su orden específico a todos los usuarios existentes
+            if (imagenIdsOrdenadas != null && imagenIdsOrdenadas.Count > 0)
+            {
+                const string sqlInsertBulk = @"
+                    INSERT INTO usuario_imagenes (usuario_id, imagen_id, posicion)
+                    SELECT id, @imagen_id, @posicion
+                    FROM usuarios;";
+
+                int posicion = 0;
+                foreach (int imagenId in imagenIdsOrdenadas)
+                {
+                    await using var cmdInsert = new SqlCommand(sqlInsertBulk, conn, trans);
+                    cmdInsert.Parameters.Add(new SqlParameter("@imagen_id", SqlDbType.Int) { Value = imagenId });
+                    cmdInsert.Parameters.Add(new SqlParameter("@posicion", SqlDbType.Int) { Value = posicion++ });
+                    await cmdInsert.ExecuteNonQueryAsync();
+                }
+            }
+
+            await trans.CommitAsync();
+        }
+        catch
+        {
+            await trans.RollbackAsync();
+            throw;
+        }
+    }
+
     #endregion
 
     private static Usuario MapearUsuario(SqlDataReader reader)

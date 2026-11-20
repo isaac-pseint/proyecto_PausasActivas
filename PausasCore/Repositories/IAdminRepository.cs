@@ -30,4 +30,14 @@ public interface IAdminRepository
     // Asignación de Imágenes a Usuarios (tabla usuario_imagenes)
     Task<List<int>> ObtenerIdsImagenesAsignadasAsync(int usuarioId);
     Task GuardarAsignacionesAsync(int usuarioId, IEnumerable<int> imagenIds);
+
+    // Configuración masiva
+    Task AplicarConfiguracionATodosAsync(
+        bool activo,
+        int intervaloMin,
+        int duracionSeg,
+        string orden,
+        TimeSpan horaInicio,
+        TimeSpan horaFin,
+        IReadOnlyList<int> imagenIdsOrdenadas);
 }

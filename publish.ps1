@@ -58,10 +58,12 @@ if (-not (Test-Path $outAdmin)) {
 
 # Limpiar ejecutables previos para asegurar empaquetado fresco
 if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasEmpleado") {
-    Get-ChildItem -Path $outEmpleado -Filter "*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-Process -Name "PausasEmpleado" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $outEmpleado -Filter "*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 if ($Proyecto -eq "" -or $Proyecto -eq "Todos" -or $Proyecto -eq "PausasAdmin") {
-    Get-ChildItem -Path $outAdmin -Filter "*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-Process -Name "PausasAdmin" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $outAdmin -Filter "*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 # 2. Publicacion de PausasEmpleado
